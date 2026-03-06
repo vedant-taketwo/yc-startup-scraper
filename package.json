@@ -1,0 +1,12 @@
+{
+  "name": "yc-startup-scraper",
+  "version": "1.0.0",
+  "description": "Scrapes Y Combinator startups and founder LinkedIn profiles",
+  "dependencies": {
+    "crawlee": "^3.7.0",
+    "playwright": "*"
+  },
+  "scripts": {
+    "start": "node src/main.js"
+  }
+}
