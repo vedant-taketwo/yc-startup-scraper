@@ -1,78 +1,95 @@
-import { PlaywrightCrawler, Dataset, log } from "crawlee";
+import { PlaywrightCrawler, Dataset, log, RequestQueue } from "crawlee";
 
-const startUrls = [
-    "https://www.ycombinator.com/companies"
-];
+const startUrl = "https://www.ycombinator.com/companies";
+
+const requestQueue = await RequestQueue.open();
+await requestQueue.addRequest({ url: startUrl, label: "LIST" });
 
 const crawler = new PlaywrightCrawler({
+    requestQueue,
     maxRequestsPerCrawl: 5000,
     headless: true,
 
     async requestHandler({ page, request, enqueueLinks }) {
 
-        const url = request.url;
+        if (request.label === "LIST") {
 
-        // STEP 1: YC directory page
-        if (url.includes("/companies") && !url.match(/\/companies\/[^/]+$/)) {
+            log.info("Loading YC companies list...");
 
-            log.info("Scraping YC directory...");
+            await page.waitForLoadState("networkidle");
 
-            await page.waitForSelector("a[href^='/companies/']");
+            // scroll to load dynamic startups
+            await page.evaluate(async () => {
+                await new Promise((resolve) => {
+                    let totalHeight = 0;
+                    const distance = 500;
+
+                    const timer = setInterval(() => {
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+
+                        if (totalHeight >= document.body.scrollHeight) {
+                            clearInterval(timer);
+                            resolve();
+                        }
+                    }, 200);
+                });
+            });
 
             await enqueueLinks({
                 selector: "a[href^='/companies/']",
                 baseUrl: "https://www.ycombinator.com",
-                globs: ["https://www.ycombinator.com/companies/*"]
+                label: "DETAIL",
             });
 
             return;
         }
 
-        // STEP 2: Startup page
-        log.info(`Scraping startup page: ${url}`);
+        if (request.label === "DETAIL") {
 
-        await page.waitForLoadState("networkidle");
+            log.info(`Scraping ${request.url}`);
 
-        const data = await page.evaluate(() => {
+            await page.waitForLoadState("networkidle");
 
-            const company = document.querySelector("h1")?.innerText || "";
+            const data = await page.evaluate(() => {
 
-            const description =
-                document.querySelector("div.text-xl")?.innerText || "";
+                const company =
+                    document.querySelector("h1")?.innerText || "";
 
-            const website =
-                document.querySelector("a[href^='http']")?.href || "";
+                const description =
+                    document.querySelector("div.text-xl")?.innerText || "";
 
-            const founders = [];
+                const website =
+                    document.querySelector("a[href^='http']")?.href || "";
 
-            document.querySelectorAll("a[href*='linkedin.com']").forEach(el => {
+                const founders = [];
 
-                const founderCard = el.closest("div");
+                document.querySelectorAll("a[href*='linkedin.com']").forEach(el => {
 
-                const name = founderCard?.innerText?.split("\n")[0] || "";
+                    const parent = el.closest("div");
 
-                founders.push({
-                    name,
-                    linkedin: el.href
+                    const name = parent?.innerText?.split("\n")[0] || "";
+
+                    founders.push({
+                        name,
+                        linkedin: el.href
+                    });
                 });
+
+                return {
+                    company,
+                    description,
+                    website,
+                    founders
+                };
             });
 
-            return {
-                company,
-                description,
-                website,
-                founders
-            };
-        });
-
-        await Dataset.pushData({
-            url,
-            company: data.company,
-            description: data.description,
-            website: data.website,
-            founders: data.founders
-        });
+            await Dataset.pushData({
+                url: request.url,
+                ...data
+            });
+        }
     }
 });
 
-await crawler.run(startUrls);
+await crawler.run();
